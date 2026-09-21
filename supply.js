@@ -6,7 +6,21 @@
 class ContextVectorManager {
     constructor() {
         this.conversationEmbeddings = []; // 存储每轮对话的向量和元数据
-        this.embeddingMethod = 'keyword'; // 'keyword' | 'api' | 'transformers'
+        this.embeddingCache = new Map(); // 🆕 本地向量缓存，避免重复计算
+        this.useCloudEmbedding = false; // 默认不使用云端，默认走浏览器本地！
+        
+        // 读取本地配置，默认走浏览器本地模型
+        try {
+            const savedConfig = (typeof window !== 'undefined' && window.localStorage)
+                ? JSON.parse(window.localStorage.getItem('gameConfig') || '{}')
+                : {};
+            this.useCloudEmbedding = savedConfig.useCloudEmbedding === true;
+            this.embeddingMethod = this.useCloudEmbedding ? (savedConfig.vectorMethod || 'api') : 'transformers';
+        } catch (e) {
+            this.useCloudEmbedding = false;
+            this.embeddingMethod = 'transformers';
+        }
+
         this.maxRetrieveCount = 5; // 最多检索5条相关历史
         this.minSimilarityThreshold = 0.3; // 最低相似度阈值
         this.maxRetrieveCharacterCount = 5; // 🆕 最多检索5个相关人物（向量匹配）
@@ -283,6 +297,31 @@ class ContextVectorManager {
             }
         } catch (error) {
             console.log('[自动预加载] 配置检查失败，跳过预加载');
+        }
+    }
+    
+    /**
+     * 自动关闭云端向量嵌入，并切换回浏览器本地模型
+     */
+    disableCloudEmbedding() {
+        console.warn('[向量系统] 云端未配置或调用失败，已自动关闭云端嵌入选项，切换回浏览器本地模型');
+        this.useCloudEmbedding = false;
+        this.embeddingMethod = 'transformers';
+
+        try {
+            const saved = JSON.parse(localStorage.getItem('gameConfig') || '{}');
+            saved.useCloudEmbedding = false;
+            saved.vectorMethod = 'transformers';
+            localStorage.setItem('gameConfig', JSON.stringify(saved));
+        } catch (e) {}
+
+        if (typeof document !== 'undefined') {
+            const chk = document.getElementById('enableCloudEmbedding');
+            if (chk) chk.checked = false;
+            const methodSelect = document.getElementById('vectorMethod');
+            if (methodSelect && methodSelect.value === 'api') {
+                methodSelect.value = 'transformers';
+            }
         }
     }
     
@@ -1492,58 +1531,47 @@ class ContextVectorManager {
     }
 
     /**
-     * 【方案2】通过API获取embedding（需要配置额外API）
+     * 【方案2】通过API获取embedding（未开启或失败时自动关闭并走浏览器本地）
      */
     async getEmbeddingFromAPI(text) {
-        // 🔧 修复：确保text是字符串类型
-        if (typeof text !== 'string') {
-            if (text === null || text === undefined) {
-                console.warn('[向量API] text为空，回退到关键词方法');
-                return this.createKeywordVector('');
-            }
-            // 如果是对象，转换为JSON字符串
-            if (typeof text === 'object') {
-                text = JSON.stringify(text);
-            } else {
-                // 其他类型转换为字符串
-                text = String(text);
-            }
+        // 如果未开启云端嵌入选项，直接走浏览器本地，绝不请求云端
+        if (!this.useCloudEmbedding) {
+            return await this.getEmbeddingFromTransformers(text);
         }
 
-        // 检查是否启用了额外API
-        if (!window.extraApiConfig || !window.extraApiConfig.enabled) {
-            console.warn('[向量API] 额外API未启用，回退到关键词方法');
-            return this.createKeywordVector(text);
+        // 确保text是字符串类型
+        if (typeof text !== 'string') {
+            if (text === null || text === undefined) {
+                return this.createKeywordVector('');
+            }
+            text = typeof text === 'object' ? JSON.stringify(text) : String(text);
         }
-        
+
         try {
-            const endpoint = window.extraApiConfig.endpoint.trim().replace(/\/+$/, '');
-            const apiKey = window.extraApiConfig.key;
-            
-            // OpenAI embeddings API
-            const response = await fetch(`${endpoint}/embeddings`, {
+            const response = await fetch('/api/embeddings', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    input: text.substring(0, 8000), // 限制长度
-                    model: 'text-embedding-ada-002' // 可配置
+                    input: text.substring(0, 8000),
+                    model: 'text-embedding-3-small'
                 })
             });
-            
-            if (!response.ok) {
-                throw new Error(`API错误: ${response.status}`);
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.data && Array.isArray(data.data) && data.data[0]?.embedding) {
+                    return data.data[0].embedding;
+                }
             }
-            
-            const data = await response.json();
-            return data.data[0].embedding; // 返回向量数组
-            
+
+            // 特指云端没有配置 embedded (如 501) 或请求失败，直接自动设置关闭！
+            console.warn(`[向量API] 云端未配置或嵌入请求失败 (${response.status})，已自动关闭云端向量选项，切换回浏览器本地`);
+            this.disableCloudEmbedding();
+            return await this.getEmbeddingFromTransformers(text);
         } catch (error) {
-            console.error('[向量API] 调用失败:', error);
-            // 回退到关键词方法
-            return this.createKeywordVector(text);
+            console.warn('[向量API] 请求云端失败，已自动关闭云端向量选项，切换回浏览器本地:', error.message);
+            this.disableCloudEmbedding();
+            return await this.getEmbeddingFromTransformers(text);
         }
     }
 
@@ -2145,18 +2173,40 @@ class ContextVectorManager {
     }
 
     /**
-     * 🆕 生成向量（根据当前设置）
+     * 🆕 生成向量（优先本地Cache命中，默认走浏览器本地）
      */
     async generateVector(text) {
-        if (this.embeddingMethod === 'keyword') {
-            return this.createKeywordVector(text);
-        } else if (this.embeddingMethod === 'api') {
-            return await this.getEmbeddingFromAPI(text);
-        } else if (this.embeddingMethod === 'transformers') {
-            return await this.getEmbeddingFromTransformers(text);
-        } else {
-            return this.createKeywordVector(text);
+        if (!text && text !== 0) {
+            return this.createKeywordVector('');
         }
+
+        // 1. 本地 Cache 检查（避免重复调用 embedding）
+        const cacheKey = typeof text === 'string' ? text.trim() : JSON.stringify(text);
+        if (this.embeddingCache && this.embeddingCache.has(cacheKey)) {
+            return this.embeddingCache.get(cacheKey);
+        }
+
+        let vector;
+        // 2. 默认走浏览器本地；仅在显式开启云端且方法为 api 时才走云端
+        if (this.useCloudEmbedding && this.embeddingMethod === 'api') {
+            vector = await this.getEmbeddingFromAPI(text);
+        } else if (this.embeddingMethod === 'keyword') {
+            vector = this.createKeywordVector(text);
+        } else {
+            // 默认走浏览器本地模型
+            vector = await this.getEmbeddingFromTransformers(text);
+        }
+
+        // 3. 写入本地 Cache（限制大小防内存溢出）
+        if (this.embeddingCache && vector) {
+            if (this.embeddingCache.size > 1000) {
+                const oldestKey = this.embeddingCache.keys().next().value;
+                this.embeddingCache.delete(oldestKey);
+            }
+            this.embeddingCache.set(cacheKey, vector);
+        }
+
+        return vector;
     }
 
     /**

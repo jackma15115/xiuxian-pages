@@ -741,10 +741,21 @@ rule:
                         </div>
 
                         <div id="vectorRetrievalSettings" style="display: none; margin-top: 10px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                            <div style="margin-bottom: 12px; padding: 10px; background: #eef2ff; border-radius: 6px; border: 1px solid #c7d2fe;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 0;">
+                                    <input type="checkbox" id="enableCloudEmbedding" onchange="toggleCloudEmbedding()"
+                                        style="margin-right: 8px; width: 16px; height: 16px; cursor: pointer;">
+                                    <span style="font-weight: bold; color: #4338ca;">☁️ 启用云端向量接口（默认关闭，走本地）</span>
+                                </label>
+                                <small style="color: #6366f1; font-size: 11px; display: block; margin-top: 4px;">
+                                    若未配置云端向量环境或调用失败，将自动关闭并降级为浏览器本地模型
+                                </small>
+                            </div>
+
                             <label style="font-size: 13px; color: #666; margin-bottom: 8px; display: block;">向量化方法</label>
                             <select id="vectorMethod" onchange="changeVectorMethod()" style="width: 100%; padding: 8px; border: 2px solid #ddd; border-radius: 8px; margin-bottom: 10px;">
                                 <option value="keyword">关键词匹配（本地，快速）</option>
-                                <option value="api">API向量化（需额外API，精确）</option>
+                                <option value="api">API向量化（需配置云端嵌入或额外API）</option>
                                 <option value="transformers">浏览器模型（离线，首次13MB）</option>
                             </select>
                             
@@ -1594,24 +1605,44 @@ async function fetchMobileModels() {
     try {
         let models = [];
         
-        if (apiType === 'gemini') {
-            // Gemini API
-            const listEndpoint = `${endpoint.replace(/\/+$/, '')}/models?key=${key}`;
-            const response = await fetch(listEndpoint);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            models = data.models
-                .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-                .map(m => m.name.replace('models/', ''));
-        } else {
-            // OpenAI格式
-            const modelsEndpoint = `${endpoint.replace(/\/+$/, '')}/models`;
-            const response = await fetch(modelsEndpoint, {
-                headers: { 'Authorization': `Bearer ${key}` }
+        // 优先通过 Cloudflare Pages Functions /api/models 代理，解决跨域问题
+        try {
+            const query = new URLSearchParams({
+                type: apiType === 'gemini' ? 'gemini' : 'openai',
+                endpoint: endpoint || '',
+                key: key || ''
             });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            models = data.data.map(m => m.id).sort();
+            const pRes = await fetch(`/api/models?${query.toString()}`);
+            if (pRes.ok) {
+                const pData = await pRes.json();
+                if (pData.models && Array.isArray(pData.models)) {
+                    models = pData.models;
+                }
+            }
+        } catch (e) {
+            console.warn('Functions 代理获取手机模型失败，尝试直连:', e);
+        }
+
+        if (models.length === 0) {
+            if (apiType === 'gemini') {
+                // Gemini API
+                const listEndpoint = `${endpoint.replace(/\/+$/, '')}/models?key=${key}`;
+                const response = await fetch(listEndpoint);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                models = data.models
+                    .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+                    .map(m => m.name.replace('models/', ''));
+            } else {
+                // OpenAI格式
+                const modelsEndpoint = `${endpoint.replace(/\/+$/, '')}/models`;
+                const response = await fetch(modelsEndpoint, {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                models = data.data.map(m => m.id).sort();
+            }
         }
 
         modelSelect.innerHTML = '';

@@ -309,10 +309,21 @@ function loadConfig() {
                     document.getElementById('vectorRetrievalSettings').style.display = 'block';
                 }
             }
+            // 🆕 加载云端向量接口配置 (默认关闭，走本地)
+            const enableCloudEmbeddingEl = document.getElementById('enableCloudEmbedding');
+            const useCloud = config.useCloudEmbedding === true;
+            if (enableCloudEmbeddingEl) {
+                enableCloudEmbeddingEl.checked = useCloud;
+            }
+            if (window.contextVectorManager) {
+                window.contextVectorManager.useCloudEmbedding = useCloud;
+            }
+
             if (config.vectorMethod !== undefined) {
-                document.getElementById('vectorMethod').value = config.vectorMethod;
+                const effectiveMethod = (!useCloud && config.vectorMethod === 'api') ? 'transformers' : config.vectorMethod;
+                document.getElementById('vectorMethod').value = effectiveMethod;
                 if (window.contextVectorManager) {
-                    window.contextVectorManager.setEmbeddingMethod(config.vectorMethod);
+                    window.contextVectorManager.setEmbeddingMethod(effectiveMethod);
                 }
             }
             if (config.maxRetrieveCount !== undefined) {
@@ -574,6 +585,24 @@ async function fetchModels() {
 
 // 获取 OpenAI 格式的模型列表
 async function fetchOpenAIModels(baseEndpoint, apiKey) {
+    // 优先通过 Cloudflare Pages Functions /api/models 代理，彻底规避 CORS 问题
+    try {
+        const query = new URLSearchParams({
+            type: 'openai',
+            endpoint: baseEndpoint || '',
+            key: apiKey || ''
+        });
+        const res = await fetch(`/api/models?${query.toString()}`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data.models && Array.isArray(data.models)) {
+                return data.models;
+            }
+        }
+    } catch (e) {
+        console.warn('Functions 获取 OpenAI 模型代理不可用，尝试直连...', e);
+    }
+
     const modelsEndpoint = getModelsEndpoint(baseEndpoint, document.getElementById('apiType').value);
 
     console.log('正在请求OpenAI模型列表:', modelsEndpoint);
@@ -607,6 +636,24 @@ async function fetchOpenAIModels(baseEndpoint, apiKey) {
 
 // 获取 Gemini 模型列表
 async function fetchGeminiModels(baseEndpoint, apiKey) {
+    // 优先通过 Cloudflare Pages Functions /api/models 代理，彻底规避 CORS 问题
+    try {
+        const query = new URLSearchParams({
+            type: 'gemini',
+            endpoint: baseEndpoint || '',
+            key: apiKey || ''
+        });
+        const res = await fetch(`/api/models?${query.toString()}`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data.models && Array.isArray(data.models)) {
+                return data.models;
+            }
+        }
+    } catch (e) {
+        console.warn('Functions 获取 Gemini 模型代理不可用，尝试直连...', e);
+    }
+
     const modelsEndpoint = getModelsEndpoint(baseEndpoint, 'gemini') + apiKey;
 
     console.log('正在请求Gemini模型列表:', modelsEndpoint);

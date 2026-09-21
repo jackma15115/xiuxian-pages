@@ -879,6 +879,7 @@ function saveGameSettings() {
     const minWordCount = document.getElementById('minWordCount').value;
     const maxTokens = document.getElementById('maxTokens').value;
     const enableVectorRetrieval = document.getElementById('enableVectorRetrieval').checked;
+    const enableCloudEmbedding = document.getElementById('enableCloudEmbedding') ? document.getElementById('enableCloudEmbedding').checked : false;
     const vectorMethod = document.getElementById('vectorMethod').value;
     const maxRetrieveCount = document.getElementById('maxRetrieveCount').value;
     const similarityThreshold = document.getElementById('similarityThreshold').value;
@@ -896,6 +897,7 @@ function saveGameSettings() {
     config.minWordCount = parseInt(minWordCount);
     config.maxTokens = parseInt(maxTokens);
     config.enableVectorRetrieval = enableVectorRetrieval;
+    config.useCloudEmbedding = enableCloudEmbedding;
     config.vectorMethod = vectorMethod;
     config.maxRetrieveCount = parseInt(maxRetrieveCount);
     config.similarityThreshold = parseFloat(similarityThreshold);
@@ -910,6 +912,7 @@ function saveGameSettings() {
     localStorage.setItem('gameConfig', JSON.stringify(config));
     
     if (window.contextVectorManager) {
+        window.contextVectorManager.useCloudEmbedding = enableCloudEmbedding;
         const systemPromptItem = window.contextVectorManager.staticKnowledgeBase.find(item => item.id === 'system_prompt_main');
         if (systemPromptItem) {
             systemPromptItem.content = systemPromptContent;
@@ -949,9 +952,44 @@ function toggleVectorRetrieval() {
     }
 }
 
+function toggleCloudEmbedding() {
+    const chk = document.getElementById('enableCloudEmbedding');
+    const enabled = chk ? chk.checked : false;
+    const methodSelect = document.getElementById('vectorMethod');
+    
+    if (window.contextVectorManager) {
+        window.contextVectorManager.useCloudEmbedding = enabled;
+    }
+
+    if (enabled) {
+        if (methodSelect && methodSelect.value !== 'api') {
+            methodSelect.value = 'api';
+            changeVectorMethod();
+        }
+    } else {
+        if (methodSelect && methodSelect.value === 'api') {
+            methodSelect.value = 'transformers';
+            changeVectorMethod();
+        }
+    }
+
+    try {
+        const saved = localStorage.getItem('gameConfig');
+        let config = saved ? JSON.parse(saved) : {};
+        config.useCloudEmbedding = enabled;
+        if (enabled && (!config.vectorMethod || config.vectorMethod === 'transformers')) {
+            config.vectorMethod = 'api';
+        } else if (!enabled && config.vectorMethod === 'api') {
+            config.vectorMethod = 'transformers';
+        }
+        localStorage.setItem('gameConfig', JSON.stringify(config));
+    } catch (e) {}
+}
+
 async function changeVectorMethod() {
     const method = document.getElementById('vectorMethod').value;
     const downloadSection = document.getElementById('downloadModelSection');
+    const cloudChk = document.getElementById('enableCloudEmbedding');
     
     // 显示/隐藏下载按钮区域
     if (downloadSection) {
@@ -962,11 +1000,28 @@ async function changeVectorMethod() {
             downloadSection.style.display = 'none';
         }
     }
+
+    // 联动云端嵌入开关
+    if (method === 'api') {
+        if (cloudChk) cloudChk.checked = true;
+        if (window.contextVectorManager) window.contextVectorManager.useCloudEmbedding = true;
+    } else {
+        if (cloudChk) cloudChk.checked = false;
+        if (window.contextVectorManager) window.contextVectorManager.useCloudEmbedding = false;
+    }
+
+    try {
+        const saved = localStorage.getItem('gameConfig');
+        let config = saved ? JSON.parse(saved) : {};
+        config.useCloudEmbedding = (method === 'api');
+        config.vectorMethod = method;
+        localStorage.setItem('gameConfig', JSON.stringify(config));
+    } catch (e) {}
     
     if (window.contextVectorManager) {
         window.contextVectorManager.setEmbeddingMethod(method);
         if (method === 'api') {
-            alert('💡 提示：API向量化需要配置额外API\n\n在"额外API设置"中启用并配置一个支持embeddings的API（如OpenAI）\n\n将自动调用 /embeddings 端点获取向量');
+            alert('💡 提示：API向量化将优先通过云端 /api/embeddings 接口进行计算。\n若服务端未配置或调用失败，将自动降级回浏览器本地。');
         }
     }
 }

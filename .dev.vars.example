@@ -1,0 +1,45 @@
+# ==========================================
+# Cloudflare Pages 环境变量配置说明文件 (.dev.vars.example)
+# 本地测试时，可复制本文件为 .dev.vars (该文件在本地生效，不会提交到仓库)
+# 部署到 Cloudflare Pages 后，请在 Pages 后台 -> 设置 -> 环境变量 中添加对应变量
+# ==========================================
+
+# ---------- 1. 主 AI API 配置 ----------
+# 主模型 API Key（必填，若配置则前端无需填写即可直接游玩）
+AI_API_KEY=sk-your-main-api-key
+
+# 主模型基础端点（可选，默认 https://api.openai.com/v1）
+# 支持兼容 OpenAI 接口的中转站、One-API，或者指向 /v1/responses 接口
+AI_API_URL=https://api.openai.com/v1
+
+# 主模型名称（可选，默认 gpt-4o-mini）
+AI_MODEL=gpt-4o-mini
+
+# 主模型协议类型（可选：openai / response / gemini，若留空会根据 URL 自动识别）
+# 设置为 response 可启用 OpenAI 新版 /v1/responses 接口兼容
+AI_TYPE=openai
+
+
+# ---------- 2. 额外 AI API 配置（可选） ----------
+# 额外 API 用于动态世界、NPC 社交关系等辅助生成
+# 注意：若以下额外配置留空或未设置，系统会自动回退使用上方的主 AI 配置！
+EXTRA_AI_API_KEY=
+EXTRA_AI_URL=
+EXTRA_AI_MODEL=
+EXTRA_AI_TYPE=
+
+
+# ---------- 3. 向量嵌入 Embedding 配置（可选） ----------
+# 注意：若未配置 EMBEDDING_API_URL，系统默认走浏览器本地计算（transformers.js 或本地分词），不发起远程调用
+# 如需使用远程向量模型，请配置以下项：
+EMBEDDING_API_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=text-embedding-3-small
+
+
+# ---------- 4. 流式传输控制（可选） ----------
+# 控制服务端向上游请求大模型时的流式行为：
+# true  : 强制上游走流式。当前端发起非流式调用时，Functions 会实时聚合 SSE 流拼接后以 JSON 返回，规避边缘超时与不支持非流式的网关报错
+# false : 强制非流式请求
+# 留空  : 原生规则（按前端客户端传入的 stream 参数执行）
+FORCE_STREAM=

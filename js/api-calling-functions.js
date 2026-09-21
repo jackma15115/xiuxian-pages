@@ -6,79 +6,78 @@
 
 // ==================== API调用函数 ====================
 
-// 调用额外API
-async function callExtraAPI(messages) {
-    const endpoint = extraApiConfig.type === 'gemini' 
-        ? `${extraApiConfig.endpoint}/models/${extraApiConfig.model}:generateContent?key=${extraApiConfig.key}`
-        : `${extraApiConfig.endpoint}/chat/completions`;
+window.isApiConfigured = function() {
+    return true; // 交由 API 请求响应处理，启动时不发多余检查
+};
 
-    let requestBody;
-    let headers = { 'Content-Type': 'application/json' };
+// ==================== Cloudflare Pages Functions 代理调用 ====================
 
-    if (extraApiConfig.type === 'gemini') {
-        // Gemini格式
-        const contents = messages
-            .filter(m => m.role !== 'system')
-            .map(m => ({
-                role: m.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: m.content }]
-            }));
+/**
+ * 通过 Cloudflare Pages Functions 代理发起请求
+ * 解决跨域 (CORS) 问题，支持自动读取服务端 ENV (MODEL, URL, APIKEY) 与流式聚合
+ */
+async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
+    const savedConfig = localStorage.getItem('gameConfig');
+    const userMaxTokens = savedConfig ? (JSON.parse(savedConfig).maxTokens || 16384) : 16384;
 
-        const systemInstruction = messages.find(m => m.role === 'system')?.content || '';
+    const requestBody = {
+        messages: messages,
+        temperature: 0.8,
+        max_tokens: userMaxTokens,
+        ...(clientConfig.model ? { clientModel: clientConfig.model } : {}),
+        ...(clientConfig.key ? { clientApiKey: clientConfig.key } : {}),
+        ...(clientConfig.endpoint ? { clientEndpoint: clientConfig.endpoint } : {}),
+        ...(clientConfig.type ? { clientType: clientConfig.type } : {}),
+    };
 
-        requestBody = {
-            contents: contents,
-            systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-            generationConfig: {
-                temperature: 0.9,
-                topK: 40,
-                topP: 0.95,
-                maxOutputTokens: 8192
-            }
-        };
-    } else {
-        // OpenAI格式（包括 Claude API 和第三方 API）
-        headers['Authorization'] = `Bearer ${extraApiConfig.key}`;
-        
-        // 🔧 获取用户配置的 max_tokens（优先）或使用默认值
-        const savedConfig = localStorage.getItem('gameConfig');
-        const userMaxTokens = savedConfig ? (JSON.parse(savedConfig).maxTokens || 16384) : 16384;
-        
-        requestBody = {
-            model: extraApiConfig.model,
-            messages: messages,
-            temperature: 0.9,
-            max_tokens: userMaxTokens  // 使用用户配置的值
-        };
+    const headers = {
+        'Content-Type': 'application/json',
+    };
+    if (clientConfig.key) {
+        headers['X-Client-Key'] = clientConfig.key;
+    }
+    if (clientConfig.endpoint) {
+        headers['X-Client-Endpoint'] = clientConfig.endpoint;
     }
 
     const response = await fetch(endpoint, {
         method: 'POST',
         headers: headers,
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
-        throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
+        let errMessage = `API请求失败: ${response.status} ${response.statusText}`;
+        try {
+            const errData = await response.json();
+            if (errData.error && errData.error.message) {
+                errMessage = errData.error.message;
+            }
+        } catch (e) {
+            const text = await response.text();
+            if (text) errMessage = text;
+        }
+        throw new Error(errMessage);
     }
 
     const data = await response.json();
-
-    // 提取内容
-    if (extraApiConfig.type === 'gemini') {
-        return data.candidates[0].content.parts[0].text;
-    } else {
+    if (data.content && typeof data.content === 'string') {
+        return data.content;
+    }
+    if (data.choices && data.choices[0]?.message?.content) {
         return data.choices[0].message.content;
     }
+    if (typeof data.response === 'string') return data.response;
+    return JSON.stringify(data);
+}
+
+// 调用额外API
+async function callExtraAPI(messages) {
+    return await callExtraAI(messages);
 }
 
 // 调用AI
 async function callAI(userMessage, isTest = false, originalUserInput = null) {
-    // 确保配置已加载
-    if (!apiConfig.endpoint || !apiConfig.key || !apiConfig.model) {
-        throw new Error('请先配置并保存API连接');
-    }
-
     let messages = [];
 
     if (!isTest) {
@@ -90,29 +89,11 @@ async function callAI(userMessage, isTest = false, originalUserInput = null) {
         ];
     }
 
-    try {
-        if (apiConfig.type === 'gemini') {
-            return await callGemini(messages);
-        } else {
-            return await callOpenAI(messages);
-        }
-    } catch (error) {
-        console.error('AI调用错误:', error);
-        throw error;
-    }
+    return await callPagesFunctionApi('/api/chat', messages, apiConfig);
 }
 
-// 调用额外API（供其他用途使用）
+// 调用额外API（供其他用途使用，服务端未配置时自动回退走主API）
 async function callExtraAI(messages, systemPrompt = null) {
-    // 确保额外API已启用并配置
-    if (!extraApiConfig.enabled) {
-        throw new Error('额外API未启用');
-    }
-    
-    if (!extraApiConfig.endpoint || !extraApiConfig.key || !extraApiConfig.model) {
-        throw new Error('请先配置并保存额外API连接');
-    }
-
     // 如果提供了系统提示词，添加到消息开头
     if (systemPrompt) {
         messages = [
@@ -121,16 +102,7 @@ async function callExtraAI(messages, systemPrompt = null) {
         ];
     }
 
-    try {
-        if (extraApiConfig.type === 'gemini') {
-            return await callExtraGemini(messages);
-        } else {
-            return await callExtraOpenAI(messages);
-        }
-    } catch (error) {
-        console.error('额外API调用错误:', error);
-        throw error;
-    }
+    return await callPagesFunctionApi('/api/extra', messages, extraApiConfig);
 }
 
 // 使用额外API的OpenAI格式调用
@@ -315,27 +287,8 @@ async function callGemini(messages) {
  * 调用手机API（第三个API）
  * @param {Array} messages - 消息数组
  * @returns {Promise<string>} - AI回复内容
- */
 async function callMobileAPI(messages) {
-    // 确保手机API已配置
-    if (!window.mobileApiConfig || !window.mobileApiConfig.enabled) {
-        throw new Error('手机API未启用');
-    }
-    
-    if (!window.mobileApiConfig.endpoint || !window.mobileApiConfig.key || !window.mobileApiConfig.model) {
-        throw new Error('请先配置并保存手机API连接');
-    }
-
-    try {
-        if (window.mobileApiConfig.type === 'gemini') {
-            return await callMobileGemini(messages);
-        } else {
-            return await callMobileOpenAI(messages);
-        }
-    } catch (error) {
-        console.error('[手机API] 调用错误:', error);
-        throw error;
-    }
+    return await callPagesFunctionApi('/api/extra', messages, window.mobileApiConfig || {});
 }
 
 /**

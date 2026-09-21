@@ -1334,8 +1334,8 @@
         async function startGame() {
             if (gameState.isProcessing) return;
 
-            if (!apiConfig.endpoint || !apiConfig.key) {
-                alert('请先配置API连接');
+            if (typeof window.isApiConfigured === 'function' ? !window.isApiConfigured() : (!apiConfig.endpoint || !apiConfig.key)) {
+                alert('请先配置API连接，或在 Cloudflare 环境变量中设置 AI_API_KEY');
                 return;
             }
 
@@ -1570,6 +1570,9 @@
                         if (currentMethod !== 'keyword') {
                             console.warn(`[向量库] ${currentMethod}方法失败，自动切换到关键词方法`);
                             window.contextVectorManager.setEmbeddingMethod('keyword');
+                            window.contextVectorManager.useCloudEmbedding = false;
+                            const cloudChk = document.getElementById('enableCloudEmbedding');
+                            if (cloudChk) cloudChk.checked = false;
                             document.getElementById('vectorMethod').value = 'keyword';
                             
                             // 提示用户

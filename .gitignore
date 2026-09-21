@@ -1,0 +1,9 @@
+# Cloudflare Pages / Workers 本地密钥文件
+.dev.vars
+.wrangler/
+
+# 依赖与临时文件
+node_modules/
+dist/
+.DS_Store
+*.log
