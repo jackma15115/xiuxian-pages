@@ -257,6 +257,147 @@ export async function aggregateStreamResponse(upstreamResponse) {
 }
 
 /**
+ * 流式转发与保活适配器：将上游各种格式（OpenAI/Responses/Gemini）的流式输出
+ * 规范化为统一的 SSE 事件流推向前端，并注入立即保活与心跳保活机制，防止 Cloudflare / 浏览器超时断连
+ */
+export function createSseForwardStream(upstreamResponse) {
+    const reader = upstreamResponse.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    const encoder = new TextEncoder();
+    let buffer = '';
+
+    return new ReadableStream({
+        async start(controller) {
+            // 1. 立即发送保活注释行，强制刷新 HTTP 200 响应头与首包给前端
+            controller.enqueue(encoder.encode(': keep-alive\n\n'));
+
+            // 2. 心跳保活定时器（每 15 秒输出一次注释），避免因上游长时思考/排队导致的空闲超时
+            const pingTimer = setInterval(() => {
+                try {
+                    controller.enqueue(encoder.encode(': ping\n\n'));
+                } catch (e) {
+                    clearInterval(pingTimer);
+                }
+            }, 15000);
+
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || trimmed.startsWith(':')) continue;
+                        if (trimmed.startsWith('data:')) {
+                            const dataStr = trimmed.replace(/^data:\s*/, '');
+                            if (dataStr === '[DONE]') {
+                                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                                continue;
+                            }
+
+                            try {
+                                const chunk = JSON.parse(dataStr);
+                                let deltaText = '';
+
+                                // 兼容 OpenAI Chat 流式 delta
+                                if (chunk.choices && chunk.choices[0]?.delta?.content) {
+                                    deltaText = chunk.choices[0].delta.content;
+                                }
+                                // 兼容 OpenAI Responses 流式 delta
+                                else if (typeof chunk.delta === 'string') {
+                                    deltaText = chunk.delta;
+                                } else if (chunk.output_text && typeof chunk.output_text === 'string') {
+                                    deltaText = chunk.output_text;
+                                }
+                                // 兼容 Gemini 流式 chunk
+                                else if (chunk.candidates && chunk.candidates[0]?.content?.parts) {
+                                    deltaText = chunk.candidates[0].content.parts.map(p => p.text || '').join('');
+                                }
+
+                                if (deltaText) {
+                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: deltaText })}\n\n`));
+                                }
+                            } catch (e) {
+                                // 如果为非 JSON 文本 chunk，直接作为增量输出
+                                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: dataStr })}\n\n`));
+                            }
+                        }
+                    }
+                }
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            } catch (err) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: err.message || 'Stream error' })}\n\n`));
+            } finally {
+                clearInterval(pingTimer);
+                try {
+                    controller.close();
+                } catch (e) {}
+            }
+        },
+        cancel() {
+            reader.cancel();
+        }
+    });
+}
+
+/**
+ * 非流式转 SSE 保活流：
+ * 当上游走非流式（如 FORCE_STREAM=false 或特定非流式模型），但前端接入 SSE 时，
+ * 立即返回流式响应，并在等待上游非流式返回的过程中定时下发心跳保活注释，
+ * 彻底避免 Cloudflare 边缘代理的 100/125 秒超时 (Error 524)。
+ */
+export function createNonStreamSseKeepAliveStream(targetEndpoint, requestHeaders, requestBody, config) {
+    const encoder = new TextEncoder();
+
+    return new ReadableStream({
+        async start(controller) {
+            // 1. 立即向客户端输出保活注释，通知 Cloudflare 边缘刷新 200 OK 响应头
+            controller.enqueue(encoder.encode(': keep-alive\n\n'));
+
+            // 2. 每 10 秒发送一次心跳保活注释，保持 TCP 管道活跃
+            const pingTimer = setInterval(() => {
+                try {
+                    controller.enqueue(encoder.encode(': ping\n\n'));
+                } catch (e) {
+                    clearInterval(pingTimer);
+                }
+            }, 10000);
+
+            try {
+                const response = await fetch(targetEndpoint, {
+                    method: 'POST',
+                    headers: requestHeaders,
+                    body: JSON.stringify(requestBody),
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
+                }
+
+                const data = await response.json();
+                const extractedText = extractTextFromAnyResponse(data);
+
+                // 发送提取出的完整文本给前端
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: extractedText })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            } catch (err) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: err.message || '请求失败' })}\n\n`));
+            } finally {
+                clearInterval(pingTimer);
+                try {
+                    controller.close();
+                } catch (e) {}
+            }
+        }
+    });
+}
+
+/**
  * 统一向上游发送 AI 对话请求（支持 OpenAI / Responses API / Gemini）
  */
 export async function callUpstreamAI(config, body, forceStreamMode = null, clientAcceptsStream = false) {
@@ -264,14 +405,15 @@ export async function callUpstreamAI(config, body, forceStreamMode = null, clien
         throw new Error('未配置 API Key，请在 Cloudflare Pages 环境变量中设置，或在前端自定义配置');
     }
 
-    // 判断最终上游是否走流式
-    let upstreamStream = false;
+    // 判断上游是否走流式：由 FORCE_STREAM 严格决定
+    let upstreamStream = true;
     if (forceStreamMode === 'stream') {
         upstreamStream = true;
     } else if (forceStreamMode === 'non-stream') {
         upstreamStream = false;
     } else {
-        upstreamStream = Boolean(body.stream || clientAcceptsStream);
+        // 未配置 FORCE_STREAM 时，若客户端请求显式指定了 stream 则遵从，否则默认走流式
+        upstreamStream = body.stream !== false;
     }
 
     const { messages = [], temperature = 0.8, max_tokens, maxOutputTokens } = body;
@@ -338,8 +480,55 @@ export async function callUpstreamAI(config, body, forceStreamMode = null, clien
         };
     }
 
-    console.log(`[Upstream Request] Type: ${config.type}, Model: ${config.model}, Stream: ${upstreamStream}, Target: ${targetEndpoint.split('?')[0]}`);
+    console.log(`[Upstream Request] Type: ${config.type}, Model: ${config.model}, UpstreamStream: ${upstreamStream}, ClientAcceptsStream: ${clientAcceptsStream}, Target: ${targetEndpoint.split('?')[0]}`);
 
+    // 分支 1：上游走非流式
+    if (!upstreamStream) {
+        if (clientAcceptsStream) {
+            // 客户端以 SSE 接收：立即返回流式保活连接，后台 fetch 完成后推回结果
+            const sseStream = createNonStreamSseKeepAliveStream(targetEndpoint, requestHeaders, requestBody, config);
+            return new Response(sseStream, {
+                status: 200,
+                headers: {
+                    'Content-Type': 'text/event-stream; charset=utf-8',
+                    'Cache-Control': 'no-cache, no-transform',
+                    'Connection': 'keep-alive',
+                    ...corsHeaders,
+                },
+            });
+        } else {
+            // 客户端显式指定非流式时，直接等待 fetch 返回标准 JSON
+            const response = await fetch(targetEndpoint, {
+                method: 'POST',
+                headers: requestHeaders,
+                body: JSON.stringify(requestBody),
+            });
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
+            }
+            const data = await response.json();
+            const extractedText = extractTextFromAnyResponse(data);
+            return jsonResponse({
+                id: data.id || ('chatcmpl-' + Date.now()),
+                object: 'chat.completion',
+                model: config.model,
+                choices: [
+                    {
+                        message: {
+                            role: 'assistant',
+                            content: extractedText,
+                        },
+                        finish_reason: 'stop',
+                    }
+                ],
+                content: extractedText,
+                raw: data,
+            });
+        }
+    }
+
+    // 分支 2：上游走流式
     const response = await fetch(targetEndpoint, {
         method: 'POST',
         headers: requestHeaders,
@@ -351,58 +540,35 @@ export async function callUpstreamAI(config, body, forceStreamMode = null, clien
         throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
     }
 
-    // 处理响应
-    if (upstreamStream) {
-        // 上游是流式
-        if (clientAcceptsStream) {
-            // 客户端也要流式，直接透明透传
-            return new Response(response.body, {
-                status: 200,
-                headers: {
-                    'Content-Type': 'text/event-stream; charset=utf-8',
-                    'Cache-Control': 'no-cache',
-                    'Connection': 'keep-alive',
-                    ...corsHeaders,
-                },
-            });
-        } else {
-            // 客户端是非流式，聚合 SSE 流后再返回 JSON
-            const fullContent = await aggregateStreamResponse(response);
-            return jsonResponse({
-                id: 'chatcmpl-' + Date.now(),
-                object: 'chat.completion',
-                model: config.model,
-                choices: [
-                    {
-                        message: {
-                            role: 'assistant',
-                            content: fullContent,
-                        },
-                        finish_reason: 'stop',
-                    }
-                ],
-                content: fullContent,
-            });
-        }
+    if (clientAcceptsStream) {
+        // 前端接入 SSE 流，进行保活与实时透传
+        const forwardStream = createSseForwardStream(response);
+        return new Response(forwardStream, {
+            status: 200,
+            headers: {
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'Cache-Control': 'no-cache, no-transform',
+                'Connection': 'keep-alive',
+                ...corsHeaders,
+            },
+        });
     } else {
-        // 上游是非流式
-        const data = await response.json();
-        const extractedText = extractTextFromAnyResponse(data);
+        // 客户端显式指定非流式时，在服务端聚合 SSE 流
+        const fullContent = await aggregateStreamResponse(response);
         return jsonResponse({
-            id: data.id || ('chatcmpl-' + Date.now()),
+            id: 'chatcmpl-' + Date.now(),
             object: 'chat.completion',
             model: config.model,
             choices: [
                 {
                     message: {
                         role: 'assistant',
-                        content: extractedText,
+                        content: fullContent,
                     },
                     finish_reason: 'stop',
                 }
             ],
-            content: extractedText,
-            raw: data,
+            content: fullContent,
         });
     }
 }

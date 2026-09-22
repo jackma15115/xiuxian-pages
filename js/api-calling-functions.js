@@ -14,7 +14,8 @@ window.isApiConfigured = function() {
 
 /**
  * 通过 Cloudflare Pages Functions 代理发起请求
- * 解决跨域 (CORS) 问题，支持自动读取服务端 ENV (MODEL, URL, APIKEY) 与流式聚合
+ * 解决跨域 (CORS) 问题，支持自动读取服务端 ENV (MODEL, URL, APIKEY)
+ * 采用前端实时接入 SSE 流式传输，彻底解决 Cloudflare 100 秒超时问题与长连接保活
  */
 async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
     const savedConfig = localStorage.getItem('gameConfig');
@@ -24,6 +25,7 @@ async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
         messages: messages,
         temperature: 0.8,
         max_tokens: userMaxTokens,
+        stream: true, // 默认开启流式以保持连接保活，防止超时
         ...(clientConfig.model ? { clientModel: clientConfig.model } : {}),
         ...(clientConfig.key ? { clientApiKey: clientConfig.key } : {}),
         ...(clientConfig.endpoint ? { clientEndpoint: clientConfig.endpoint } : {}),
@@ -32,6 +34,7 @@ async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
 
     const headers = {
         'Content-Type': 'application/json',
+        'Accept': 'text/event-stream, application/json',
     };
     if (clientConfig.key) {
         headers['X-Client-Key'] = clientConfig.key;
@@ -60,6 +63,71 @@ async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
         throw new Error(errMessage);
     }
 
+    const contentType = response.headers.get('Content-Type') || '';
+
+    // 1. 如果是 SSE 流式响应，由前端流式接收并保活连接
+    if (contentType.includes('text/event-stream') && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let fullContent = '';
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith(':')) {
+                    // 心跳或保活注释行（如 : keep-alive 或 : ping），用于保持连接，直接跳过
+                    continue;
+                }
+                if (trimmed.startsWith('data:')) {
+                    const dataStr = trimmed.replace(/^data:\s*/, '');
+                    if (dataStr === '[DONE]') continue;
+
+                    try {
+                        const parsed = JSON.parse(dataStr);
+                        if (parsed.error) {
+                            throw new Error(parsed.error);
+                        }
+                        if (parsed.delta) {
+                            fullContent += parsed.delta;
+                        } else if (parsed.choices && parsed.choices[0]?.delta?.content) {
+                            fullContent += parsed.choices[0].delta.content;
+                        } else if (parsed.content) {
+                            fullContent += parsed.content;
+                        }
+                    } catch (err) {
+                        if (err.message && (err.message.includes('API') || err.message.includes('Error'))) {
+                            throw err;
+                        }
+                        // 非 JSON 文本直接作为增量
+                        fullContent += dataStr;
+                    }
+
+                    // 实时更新 loading 状态，给玩家直观的生成进度反馈
+                    const loadingEl = document.getElementById('loading-message');
+                    if (loadingEl && fullContent.length > 0) {
+                        const loadingContent = loadingEl.querySelector('.message-content') || loadingEl;
+                        loadingContent.innerHTML = `<span class="loading"></span> AI推演中... (已接收 ${fullContent.length} 字)`;
+                    }
+                }
+            }
+        }
+
+        if (!fullContent) {
+            throw new Error('未接收到有效的 AI 流式回复内容');
+        }
+
+        return fullContent;
+    }
+
+    // 2. 普通非流式 JSON 响应（如强制非流式配置时）
     const data = await response.json();
     if (data.content && typeof data.content === 'string') {
         return data.content;

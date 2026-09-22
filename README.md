@@ -194,7 +194,7 @@ jobs:
 | **`EMBEDDING_API_URL`** | 否 | 远程向量嵌入接口端点 | **留空时表示未配置，系统自动使用浏览器本地计算** |
 | **`EMBEDDING_API_KEY`** | 否 | 嵌入模型 API Key | **留空时自动回退使用 `AI_API_KEY`** |
 | **`EMBEDDING_MODEL`** | 否 | 嵌入模型名称 | `text-embedding-3-small`（默认） |
-| **`FORCE_STREAM`** | 否 | 强制流式控制 | `true`：强制流式并聚合；`false`：强制非流式；**留空：原生规则** |
+| **`FORCE_STREAM`** | 否 | 强制流式控制 | `true`：强制端到端 SSE 流式传输并激活心跳保活（规避超时）；`false`：强制非流式 JSON；**留空：原生规则（前端默认 SSE 保活）** |
 
 > 💡 **提示**：如果您希望使用 OpenAI 新推出的 `/v1/responses` 接口，只需将 `AI_TYPE` 设为 `response`，或者将 `AI_API_URL` 直接指向结尾为 `/responses` 的端点。
 
