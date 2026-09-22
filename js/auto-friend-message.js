@@ -327,14 +327,17 @@ async function callMobileAPIForAutoMessage(messages) {
     }
 
     const config = window.mobileApiConfig;
+    
     if (!config || !config.key || !config.endpoint) {
         throw new Error('手机API未配置');
     }
     
     const apiType = config.type || 'openai';
+    
     let url, headers, body;
     
     if (apiType === 'gemini') {
+        // Gemini API
         url = `${config.endpoint}/v1beta/models/${config.model}:generateContent?key=${config.key}`;
         headers = { 'Content-Type': 'application/json' };
         body = {
@@ -348,6 +351,7 @@ async function callMobileAPIForAutoMessage(messages) {
             }
         };
     } else {
+        // OpenAI 兼容 API
         url = `${config.endpoint}/chat/completions`;
         headers = {
             'Content-Type': 'application/json',
@@ -361,6 +365,10 @@ async function callMobileAPIForAutoMessage(messages) {
         };
     }
     
+    console.log('[📨好友自动消息] 调用API:', url);
+    console.log('[📨好友自动消息] API类型:', apiType);
+    console.log('[📨好友自动消息] 请求体大小:', JSON.stringify(body).length, '字符');
+    
     const response = await fetch(url, {
         method: 'POST',
         headers: headers,
@@ -373,7 +381,24 @@ async function callMobileAPIForAutoMessage(messages) {
     }
     
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log('[📨好友自动消息] API原始响应:', JSON.stringify(data).substring(0, 1000));
+    
+    // 提取回复内容
+    let content = '';
+    if (apiType === 'gemini') {
+        content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } else {
+        content = data.choices?.[0]?.message?.content || '';
+    }
+    
+    // 如果OpenAI格式没有内容，尝试Gemini格式（某些代理API可能混合格式）
+    if (!content && data.candidates) {
+        content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        console.log('[📨好友自动消息] 使用Gemini格式解析');
+    }
+    
+    console.log('[📨好友自动消息] 提取的内容长度:', content?.length || 0);
+    return content;
 }
 
 /**
