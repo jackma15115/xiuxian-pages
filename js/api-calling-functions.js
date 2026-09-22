@@ -17,31 +17,22 @@ window.isApiConfigured = function() {
  * 解决跨域 (CORS) 问题，支持自动读取服务端 ENV (MODEL, URL, APIKEY)
  * 采用前端实时接入 SSE 流式传输，彻底解决 Cloudflare 100 秒超时问题与长连接保活
  */
-async function callPagesFunctionApi(endpoint, messages, clientConfig = {}) {
+async function callPagesFunctionApi(endpoint, messages) {
     const savedConfig = localStorage.getItem('gameConfig');
     const userMaxTokens = savedConfig ? (JSON.parse(savedConfig).maxTokens || 16384) : 16384;
 
+    // 路线A：AI 完全由服务端环境变量 (ENV) 托管，前端不发送任何客户端 Key/Model 覆盖
     const requestBody = {
         messages: messages,
         temperature: 0.8,
         max_tokens: userMaxTokens,
         stream: true, // 默认开启流式以保持连接保活，防止超时
-        ...(clientConfig.model ? { clientModel: clientConfig.model } : {}),
-        ...(clientConfig.key ? { clientApiKey: clientConfig.key } : {}),
-        ...(clientConfig.endpoint ? { clientEndpoint: clientConfig.endpoint } : {}),
-        ...(clientConfig.type ? { clientType: clientConfig.type } : {}),
     };
 
     const headers = {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream, application/json',
     };
-    if (clientConfig.key) {
-        headers['X-Client-Key'] = clientConfig.key;
-    }
-    if (clientConfig.endpoint) {
-        headers['X-Client-Endpoint'] = clientConfig.endpoint;
-    }
 
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -157,7 +148,7 @@ async function callAI(userMessage, isTest = false, originalUserInput = null) {
         ];
     }
 
-    return await callPagesFunctionApi('/api/chat', messages, apiConfig);
+    return await callPagesFunctionApi('/api/chat', messages);
 }
 
 // 调用额外API（供其他用途使用，服务端未配置时自动回退走主API）
@@ -170,7 +161,7 @@ async function callExtraAI(messages, systemPrompt = null) {
         ];
     }
 
-    return await callPagesFunctionApi('/api/extra', messages, extraApiConfig);
+    return await callPagesFunctionApi('/api/extra', messages);
 }
 
 // 使用额外API的OpenAI格式调用
@@ -352,11 +343,12 @@ async function callGemini(messages) {
 // ==================== 📱 手机API调用函数 ====================
 
 /**
- * 调用手机API（第三个API）
+ * 调用手机API（第三个API，走服务端配置的额外/主API代理）
  * @param {Array} messages - 消息数组
  * @returns {Promise<string>} - AI回复内容
+ */
 async function callMobileAPI(messages) {
-    return await callPagesFunctionApi('/api/extra', messages, window.mobileApiConfig || {});
+    return await callPagesFunctionApi('/api/extra', messages);
 }
 
 /**

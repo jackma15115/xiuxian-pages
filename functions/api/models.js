@@ -9,15 +9,8 @@ async function handleModels(context, clientParams = {}) {
 
     const urlObj = new URL(request.url);
     const target = clientParams.target || urlObj.searchParams.get('target') || 'main';
-    const clientKey = clientParams.key || urlObj.searchParams.get('key') || request.headers.get('X-Client-Key') || '';
-    const clientEndpoint = clientParams.endpoint || urlObj.searchParams.get('endpoint') || request.headers.get('X-Client-Endpoint') || '';
-    const clientType = clientParams.type || urlObj.searchParams.get('type') || '';
 
-    const config = resolveConfig(env, target, {
-        key: clientKey,
-        url: clientEndpoint,
-        type: clientType,
-    });
+    const config = resolveConfig(env, target);
 
     if (!config.key) {
         return errorResponse('未配置 API Key，无法获取模型列表', 400);

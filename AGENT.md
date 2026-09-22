@@ -9,8 +9,9 @@
 
 本项目采用 **纯静态前端 + Cloudflare Pages Functions 边缘代理** 架构，核心设计原则如下：
 
-1. **零跨域 (Zero CORS) & 密钥完全隔离**：
-   - 玩家端无需暴露任何 API Key。大模型 Key、URL、Model 均托管在 Cloudflare Pages 环境变量中。
+1. **零跨域 (Zero CORS) & 彻底废除 BYOK (纯服务端 ENV 托管)**：
+   - 采用 **路线 A (纯服务端托管)**：玩家端绝不输入也不暴露任何 API Key。大模型 Key、URL、Model 均统一配置在 Cloudflare Pages 环境变量中。
+   - 前端弹窗彻底移除 API Key/端点/模型输入框，前端代码严禁向 Functions 传递 `clientModel`、`clientApiKey` 等参数，根除前端默认值（如 `gpt-4o-mini`）覆盖服务端 `AI_MODEL` 导致的 404 `model_not_found` 恶性 BUG。
    - 前端所有 AI 请求统一发往同源相对路径 `/api/chat` 和 `/api/extra`，彻底杜绝跨域问题。
 2. **端到端 SSE 流式保活（规避 100 秒边缘超时）**：
    - **超时元凶**：Cloudflare 边缘代理对静默 HTTP 连接有 **100~125 秒硬性超时 (Error 524)**。

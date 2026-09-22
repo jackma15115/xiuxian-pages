@@ -15,13 +15,8 @@ export async function onRequestPost(context) {
             return errorResponse('无效的 JSON 请求体', 400);
         }
 
-        const clientOverrides = {
-            key: request.headers.get('X-Client-Key') || body.clientApiKey || '',
-            url: request.headers.get('X-Client-Endpoint') || body.clientEndpoint || '',
-            model: request.headers.get('X-Client-Model') || body.clientModel || body.model || '',
-        };
-
-        const config = resolveConfig(env, 'embedding', clientOverrides);
+        // 路线A：嵌入模型完全由服务端环境变量 (ENV) 托管
+        const config = resolveConfig(env, 'embedding');
 
         // 如果未配置远程嵌入接口，返回 501 状态，提示前端回退到浏览器本地计算
         if (!config.hasConfig) {

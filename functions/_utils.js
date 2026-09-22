@@ -80,14 +80,54 @@ export function detectApiType(url, explicitType) {
 }
 
 /**
- * 解析 AI 配置（支持主 API、额外 API 回退主 API、Embedding API）
+ * 根据 Base URL 智能推断缺省模型名称（防止用户配置了非 OpenAI 的 URL 但未配 MODEL 导致 404 model_not_found）
  */
-export function resolveConfig(env, target = 'main', clientOverrides = {}) {
-    // 1. 主 API 配置
-    const mainKey = (env.AI_API_KEY || env.AI_KEY || env.API_KEY || env.OPENAI_API_KEY || '').trim();
-    let mainUrl = (env.AI_API_URL || env.AI_BASE_URL || env.AI_URL || env.OPENAI_BASE_URL || 'https://api.openai.com/v1').trim();
-    mainUrl = mainUrl.replace(/\/+$/, '');
-    const mainModel = (env.AI_MODEL || env.MODEL || 'gpt-4o-mini').trim();
+export function getDefaultModelForUrl(url) {
+    const lower = (url || '').toLowerCase();
+    if (lower.includes('deepseek.com')) return 'deepseek-chat';
+    if (lower.includes('moonshot.cn') || lower.includes('kimi')) return 'moonshot-v1-8k';
+    if (lower.includes('minimax')) return 'abab6.5s-chat';
+    if (lower.includes('bigmodel.cn') || lower.includes('zhipu')) return 'glm-4-flash';
+    if (lower.includes('dashscope') || lower.includes('aliyun') || lower.includes('qwen')) return 'qwen-plus';
+    if (lower.includes('generativelanguage.googleapis.com') || lower.includes('googlegemini')) return 'gemini-1.5-flash';
+    if (lower.includes('anthropic.com')) return 'claude-3-5-sonnet-20241022';
+    return 'gpt-4o-mini';
+}
+
+/**
+ * 解析 AI 配置：严格完全使用 Cloudflare Pages 服务端环境变量 (ENV)，忽略前端任何参数干扰
+ */
+export function resolveConfig(env, target = 'main') {
+    // 1. 主 API 配置：严格从环境变量读取
+    const mainKey = (
+        env.AI_API_KEY ||
+        env.AI_KEY ||
+        env.API_KEY ||
+        env.OPENAI_API_KEY ||
+        ''
+    ).trim();
+
+    let mainUrl = (
+        env.AI_API_URL ||
+        env.AI_BASE_URL ||
+        env.AI_URL ||
+        env.OPENAI_BASE_URL ||
+        'https://api.openai.com/v1'
+    ).trim().replace(/\/+$/, '');
+
+    // 支持所有常见环境变量名称
+    const envMainModel = (
+        env.AI_MODEL ||
+        env.MODEL ||
+        env.AI_API_MODEL ||
+        env.OPENAI_MODEL ||
+        env.CHAT_MODEL ||
+        env.DEFAULT_MODEL ||
+        ''
+    ).trim();
+
+    // 未指定模型时，根据 URL 智能推断（如 deepseek.com -> deepseek-chat），否则默认 gpt-4o-mini
+    const mainModel = envMainModel || getDefaultModelForUrl(mainUrl);
     const mainType = detectApiType(mainUrl, env.AI_TYPE);
 
     const mainConfig = {
@@ -95,55 +135,80 @@ export function resolveConfig(env, target = 'main', clientOverrides = {}) {
         url: mainUrl,
         model: mainModel,
         type: mainType,
+        isFallback: false,
     };
 
     if (target === 'main') {
-        return {
-            key: clientOverrides.key || mainConfig.key,
-            url: (clientOverrides.url ? clientOverrides.url.replace(/\/+$/, '') : mainConfig.url),
-            model: clientOverrides.model || mainConfig.model,
-            type: detectApiType(clientOverrides.url || mainConfig.url, clientOverrides.type || mainConfig.type),
-            isFallback: false,
-        };
+        return mainConfig;
     }
 
     if (target === 'extra') {
-        // 2. 额外 API 配置：若未配置则回退到主 API
-        const extraKey = (env.EXTRA_AI_API_KEY || env.EXTRA_API_KEY || env.EXTRA_KEY || '').trim();
-        let extraUrl = (env.EXTRA_AI_URL || env.EXTRA_BASE_URL || env.EXTRA_AI_BASE_URL || '').trim();
-        if (extraUrl) extraUrl = extraUrl.replace(/\/+$/, '');
-        const extraModel = (env.EXTRA_AI_MODEL || env.EXTRA_MODEL || '').trim();
-        const extraType = env.EXTRA_AI_TYPE ? detectApiType(extraUrl, env.EXTRA_AI_TYPE) : '';
+        // 2. 额外 API 配置：严格从环境变量读取；若未配置则 100% 自动回退走主 API
+        const extraKey = (
+            env.EXTRA_AI_API_KEY ||
+            env.EXTRA_API_KEY ||
+            env.EXTRA_KEY ||
+            ''
+        ).trim();
 
-        const hasCustomExtra = Boolean(extraKey || extraUrl || extraModel);
+        let extraUrl = (
+            env.EXTRA_AI_URL ||
+            env.EXTRA_BASE_URL ||
+            env.EXTRA_AI_BASE_URL ||
+            env.EXTRA_URL ||
+            ''
+        ).trim().replace(/\/+$/, '');
 
-        const mergedKey = clientOverrides.key || extraKey || mainConfig.key;
-        const mergedUrl = (clientOverrides.url ? clientOverrides.url.replace(/\/+$/, '') : '') || extraUrl || mainConfig.url;
-        const mergedModel = clientOverrides.model || extraModel || mainConfig.model;
-        const mergedType = detectApiType(mergedUrl, clientOverrides.type || extraType || mainConfig.type);
+        const envExtraModel = (
+            env.EXTRA_AI_MODEL ||
+            env.EXTRA_MODEL ||
+            env.EXTRA_AI_API_MODEL ||
+            ''
+        ).trim();
+
+        const hasCustomExtra = Boolean(extraKey || extraUrl || envExtraModel);
+
+        const finalExtraKey = extraKey || mainConfig.key;
+        const finalExtraUrl = extraUrl || mainConfig.url;
+        const finalExtraModel = envExtraModel || (hasCustomExtra ? getDefaultModelForUrl(finalExtraUrl) : mainConfig.model);
+        const finalExtraType = detectApiType(finalExtraUrl, env.EXTRA_AI_TYPE || env.AI_TYPE);
 
         return {
-            key: mergedKey,
-            url: mergedUrl,
-            model: mergedModel,
-            type: mergedType,
-            isFallback: !hasCustomExtra && !clientOverrides.key,
+            key: finalExtraKey,
+            url: finalExtraUrl,
+            model: finalExtraModel,
+            type: finalExtraType,
+            isFallback: !hasCustomExtra,
         };
     }
 
     if (target === 'embedding') {
-        // 3. 嵌入 API 配置
-        const embUrl = (env.EMBEDDING_API_URL || env.EMBEDDING_BASE_URL || env.EMBEDDING_URL || '').trim();
-        const embKey = (env.EMBEDDING_API_KEY || env.EMBEDDING_KEY || mainConfig.key || '').trim();
-        const embModel = (env.EMBEDDING_MODEL || 'text-embedding-3-small').trim();
+        // 3. 嵌入 API 配置：严格从环境变量读取
+        const embUrl = (
+            env.EMBEDDING_API_URL ||
+            env.EMBEDDING_BASE_URL ||
+            env.EMBEDDING_URL ||
+            ''
+        ).trim().replace(/\/+$/, '');
 
-        const hasEmbeddingConfig = Boolean(embUrl || clientOverrides.url);
+        const embKey = (
+            env.EMBEDDING_API_KEY ||
+            env.EMBEDDING_KEY ||
+            mainConfig.key ||
+            ''
+        ).trim();
+
+        const embModel = (
+            env.EMBEDDING_MODEL ||
+            env.EMBEDDING_API_MODEL ||
+            'text-embedding-3-small'
+        ).trim();
 
         return {
-            hasConfig: hasEmbeddingConfig,
-            key: clientOverrides.key || embKey,
-            url: (clientOverrides.url ? clientOverrides.url.replace(/\/+$/, '') : '') || (embUrl ? embUrl.replace(/\/+$/, '') : ''),
-            model: clientOverrides.model || embModel,
+            hasConfig: Boolean(embUrl),
+            key: embKey,
+            url: embUrl,
+            model: embModel,
         };
     }
 
@@ -376,7 +441,11 @@ export function createNonStreamSseKeepAliveStream(targetEndpoint, requestHeaders
 
                 if (!response.ok) {
                     const errText = await response.text();
-                    throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
+                    let detail = errText.substring(0, 300);
+                    if (response.status === 404 && errText.includes('model_not_found')) {
+                        detail += ` [当前请求模型: "${config.model}", 目标端点: "${targetEndpoint.split('?')[0]}", 请核对环境变量 AI_MODEL]`;
+                    }
+                    throw new Error(`上游 AI 服务报错 (${response.status}): ${detail}`);
                 }
 
                 const data = await response.json();
@@ -505,7 +574,11 @@ export async function callUpstreamAI(config, body, forceStreamMode = null, clien
             });
             if (!response.ok) {
                 const errText = await response.text();
-                throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
+                let detail = errText.substring(0, 300);
+                if (response.status === 404 && errText.includes('model_not_found')) {
+                    detail += ` [当前请求模型: "${config.model}", 目标端点: "${targetEndpoint.split('?')[0]}", 请核对环境变量 AI_MODEL]`;
+                }
+                throw new Error(`上游 AI 服务报错 (${response.status}): ${detail}`);
             }
             const data = await response.json();
             const extractedText = extractTextFromAnyResponse(data);
@@ -537,7 +610,11 @@ export async function callUpstreamAI(config, body, forceStreamMode = null, clien
 
     if (!response.ok) {
         const errText = await response.text();
-        throw new Error(`上游 AI 服务报错 (${response.status}): ${errText.substring(0, 300)}`);
+        let detail = errText.substring(0, 300);
+        if (response.status === 404 && errText.includes('model_not_found')) {
+            detail += ` [当前请求模型: "${config.model}", 目标端点: "${targetEndpoint.split('?')[0]}", 请核对环境变量 AI_MODEL]`;
+        }
+        throw new Error(`上游 AI 服务报错 (${response.status}): ${detail}`);
     }
 
     if (clientAcceptsStream) {

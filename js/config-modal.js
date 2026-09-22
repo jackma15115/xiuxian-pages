@@ -12,105 +12,21 @@ function generateConfigModal() {
         </div>
         <div class="modal-body">
             <div class="config-panel">
-                <!-- API设置折叠区块 -->
+                <!-- AI服务状态 -->
                 <div class="collapsible-section">
-                    <div class="collapsible-header collapsed" onclick="toggleSection('apiSection')">
-                        <span>🔌 API设置</span>
+                    <div class="collapsible-header" onclick="toggleSection('apiStatusSection')">
+                        <span>⚡ AI 服务状态（服务端托管）</span>
                         <span class="arrow">▼</span>
                     </div>
-                    <div class="collapsible-content" id="apiSection">
-                        <div class="config-group">
-                            <label>API类型</label>
-                            <select id="apiType">
-                                <option value="openai">OpenAI</option>
-                                <option value="gemini">Gemini直连</option>
-                                <option value="custom">第三方(/v1)</option>
-                            </select>
+                    <div class="collapsible-content" id="apiStatusSection" style="padding: 14px; background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(59, 130, 246, 0.08) 100%); border-radius: 8px; border: 1px solid rgba(34, 197, 94, 0.25); margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e;"></span>
+                            <strong style="color: #15803d; font-size: 14px;">免密畅玩 · 服务端已全权托管</strong>
                         </div>
-
-                        <div class="config-group">
-                            <label>API端点</label>
-                            <input type="text" id="apiEndpoint" placeholder="https://api.openai.com/v1">
-                        </div>
-
-                        <div class="config-group">
-                            <label>API密钥</label>
-                            <input type="password" id="apiKey" placeholder="输入API密钥">
-                        </div>
-
-                        <button class="btn btn-primary" onclick="fetchModels()" id="fetchModelsBtn">
-                            <span class="status-indicator" id="connectionStatus"></span>
-                            连接并获取模型
-                        </button>
-
-                        <div class="config-group" id="modelSelectGroup" style="display: none;">
-                            <label>选择模型（必选）</label>
-                            <select id="modelSelect" size="8" style="height: 200px;">
-                                <option value="">正在加载模型列表...</option>
-                            </select>
-                        </div>
-
-                        <button class="btn btn-primary" onclick="saveConnection()" id="saveConnectionBtn"
-                            style="display: none;">
-                            💾 保存API配置
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 额外API设置折叠区块 -->
-                <div class="collapsible-section">
-                    <div class="collapsible-header collapsed" onclick="toggleSection('extraApiSection')">
-                        <span>🔗 额外API设置（可选）</span>
-                        <span class="arrow">▼</span>
-                    </div>
-                    <div class="collapsible-content" id="extraApiSection">
-                        <div class="config-group">
-                            <label style="display: flex; align-items: center; cursor: pointer;">
-                                <input type="checkbox" id="enableExtraApi" onchange="toggleExtraApiFields()"
-                                    style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
-                                <span>✅ 启用额外API</span>
-                            </label>
-                            <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
-                                勾选后启用第二个API配置（可用于其他用途）
-                            </small>
-                        </div>
-
-                        <div id="extraApiFields" style="display: none;">
-                            <div class="config-group" style="margin-top: 15px;">
-                                <label>额外API类型</label>
-                                <select id="extraApiType">
-                                    <option value="openai">OpenAI</option>
-                                    <option value="gemini">Gemini直连</option>
-                                    <option value="custom">第三方(/v1)</option>
-                                </select>
-                            </div>
-
-                            <div class="config-group">
-                                <label>额外API端点</label>
-                                <input type="text" id="extraApiEndpoint" placeholder="https://api.openai.com/v1">
-                            </div>
-
-                            <div class="config-group">
-                                <label>额外API密钥</label>
-                                <input type="password" id="extraApiKey" placeholder="输入API密钥">
-                            </div>
-
-                            <button class="btn btn-primary" onclick="fetchExtraModels()" id="fetchExtraModelsBtn">
-                                <span class="status-indicator" id="extraConnectionStatus"></span>
-                                连接并获取模型
-                            </button>
-
-                            <div class="config-group" id="extraModelSelectGroup" style="display: none;">
-                                <label>选择模型（必选）</label>
-                                <select id="extraModelSelect" size="8" style="height: 200px;">
-                                    <option value="">正在加载模型列表...</option>
-                                </select>
-                            </div>
-
-                            <button class="btn btn-primary" onclick="saveExtraConnection()" id="saveExtraConnectionBtn"
-                                style="display: none;">
-                                💾 保存额外API配置
-                            </button>
+                        <div style="font-size: 12px; color: #4b5563; line-height: 1.7;">
+                            ✨ <strong>无需配置 API 密钥或端点</strong>：游戏 AI 由 Cloudflare Pages Functions 服务端环境变量（ENV）全权托管，开箱即玩。<br>
+                            🚀 <strong>全自动流式保活</strong>：已默认启用 SSE 流式通信与心跳保活，彻底规避 100 秒连接超时。<br>
+                            🛠️ <strong>管理员配置提示</strong>：更换模型或服务商请前往 Cloudflare Pages 后台 <em>Settings &gt; Environment variables</em> 设置 <code>AI_API_KEY</code>, <code>AI_API_URL</code>, <code>AI_MODEL</code>。
                         </div>
                     </div>
                 </div>
@@ -138,48 +54,14 @@ function generateConfigModal() {
                                 <span>✅ 启用外置手机</span>
                             </label>
                             <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
-                                勾选后在游戏界面右侧显示手机，需配置手机API
+                                勾选后在游戏界面右侧显示手机，与游戏角色即时私聊
                             </small>
                         </div>
 
                         <div id="mobilePhoneFields" style="display: none;">
-                            <div class="config-group" style="margin-top: 15px;">
-                                <label>手机API类型</label>
-                                <select id="mobileApiType">
-                                    <option value="openai">OpenAI</option>
-                                    <option value="gemini">Gemini直连</option>
-                                    <option value="custom">第三方(/v1)</option>
-                                </select>
+                            <div style="margin-top: 15px; margin-bottom: 15px; padding: 10px; background: rgba(0, 243, 255, 0.08); border-radius: 6px; font-size: 12px; color: #0066cc; line-height: 1.6; border: 1px solid rgba(0, 243, 255, 0.2);">
+                                ⚡ <strong>手机 AI 服务已就绪</strong>：自动经由 Cloudflare Pages 服务端代理调用，无需配置密钥。
                             </div>
-
-                            <div class="config-group">
-                                <label>手机API端点</label>
-                                <input type="text" id="mobileApiEndpoint" placeholder="https://api.openai.com/v1">
-                            </div>
-
-                            <div class="config-group">
-                                <label>手机API密钥</label>
-                                <input type="password" id="mobileApiKey" placeholder="输入API密钥">
-                            </div>
-
-                            <button class="btn btn-primary" onclick="fetchMobileModels()" id="fetchMobileModelsBtn">
-                                <span class="status-indicator" id="mobileConnectionStatus"></span>
-                                连接并获取模型
-                            </button>
-
-                            <div class="config-group" id="mobileModelSelectGroup" style="display: none;">
-                                <label>选择模型（必选）</label>
-                                <select id="mobileModelSelect" size="8" style="height: 200px;">
-                                    <option value="">正在加载模型列表...</option>
-                                </select>
-                            </div>
-
-                            <button class="btn btn-primary" onclick="saveMobileConnection()" id="saveMobileConnectionBtn"
-                                style="display: none;">
-                                💾 保存手机API配置
-                            </button>
-
-                            <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
 
                             <div class="config-group">
                                 <label style="display: flex; align-items: center; cursor: pointer;">

@@ -15,15 +15,8 @@ export async function onRequestPost(context) {
             return errorResponse('无效的 JSON 请求体', 400);
         }
 
-        // 读取客户端自定义覆盖参数（若有）
-        const clientOverrides = {
-            key: request.headers.get('X-Client-Key') || body.clientApiKey || '',
-            url: request.headers.get('X-Client-Endpoint') || body.clientEndpoint || '',
-            model: request.headers.get('X-Client-Model') || body.clientModel || body.model || '',
-            type: body.clientType || '',
-        };
-
-        const config = resolveConfig(env, 'main', clientOverrides);
+        // 路线A：AI 完全由服务端环境变量 (ENV) 托管，忽略前端任何自定义覆盖
+        const config = resolveConfig(env, 'main');
         const streamMode = resolveStreamMode(env);
 
         // 客户端是否显式要求流式
